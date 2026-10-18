@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Collab Board</title>
+<style>
+  body { font-family: sans-serif; max-width: 700px; margin: 30px auto; padding: 0 12px; }
+  input, button { padding: 6px; margin: 3px 0; }
+  textarea { width: 100%; height: 300px; padding: 8px; font-size: 16px; box-sizing: border-box; }
+  #boards button { margin-right: 6px; }
+  .hidden { display: none; }
+  #status, #authMsg { color: gray; }
+</style>
+</head>
+<body>
+<h2>Collab Board</h2>
+
+<div id="auth">
+  <input id="email" placeholder="email"><br>
+  <input id="password" type="password" placeholder="password"><br>
+  <button onclick="login()">Login</button>
+  <button onclick="register()">Register</button>
+  <p id="authMsg"></p>
+</div>
+
+<div id="main" class="hidden">
+  <input id="newTitle" placeholder="new board title">
+  <button onclick="createBoard()">Create board</button>
+  <div id="boards"></div>
+  <h3 id="boardName"></h3>
+  <p id="status"></p>
+  <textarea id="editor" disabled placeholder="Open a board to start typing"></textarea>
+</div>
+
+<script>
+let token = null;
+let ws = null;
+const $ = (id) => document.getElementById(id);
+
+async function api(path, method = "GET", body = null) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = "Bearer " + token;
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : null,
+  });
+  if (!res.ok) throw new Error("Request failed (" + res.status + ")");
+  return res.status === 204 ? null : res.json();
+}
+
+async function register() {
+  try {
+    await api("/users/register", "POST", { email: $("email").value, password: $("password").value });
+    await login();
+  } catch (e) {
+    $("authMsg").textContent = "Register failed: " + e.message;
+  }
+}
+
+async function login() {
+  try {
+    const data = await api("/users/login", "POST", { email: $("email").value, password: $("password").value });
+    token = data.access_token;
+    $("auth").classList.add("hidden");
+    $("main").classList.remove("hidden");
+    loadBoards();
+  } catch (e) {
+    $("authMsg").textContent = "Login failed: " + e.message;
+  }
+}
+
+async function loadBoards() {
+  const boards = await api("/boards/");
+  const box = $("boards");
+  box.innerHTML = "";
+  boards.forEach((b) => {
+    const btn = document.createElement("button");
+    btn.textContent = b.title + " (#" + b.id + ")";
+    btn.onclick = () => openBoard(b);
+    box.appendChild(btn);
+  });
+}
+
+async function createBoard() {
+  const title = $("newTitle").value.trim();
+  if (!title) return;
+  await api("/boards/", "POST", { title });
+  $("newTitle").value = "";
+  loadBoards();
+}
+
+function openBoard(board) {
+  if (ws) ws.close();
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(scheme + "://" + location.host + "/ws/boards/" + board.id + "?token=" + token);
+
+  $("boardName").textContent = board.title;
+  $("status").textContent = "Connecting...";
+  $("editor").disabled = true;
+
+  ws.onopen = () => {
+    $("status").textContent = "Connected. Open this board in another window to collaborate.";
+    $("editor").disabled = false;
+  };
+  ws.onclose = () => {
+    $("status").textContent = "Disconnected.";
+    $("editor").disabled = true;
+  };
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === "init" || data.type === "update") {
+      const editor = $("editor");
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      editor.value = data.content;
+      editor.setSelectionRange(start, end);
+    }
+  };
+}
+
+$("editor").addEventListener("input", () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "update", content: $("editor").value }));
+  }
+});
+</script>
+</body>
+</html>
