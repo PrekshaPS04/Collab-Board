@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -5,11 +6,20 @@ from fastapi.responses import FileResponse
 
 from .database import Base, engine
 from . import models
+from .manager import manager
 from .routers import users, boards, ws
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Collab Board")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await manager.start()
+    yield
+    await manager.stop()
+
+
+app = FastAPI(title="Collab Board", lifespan=lifespan)
 app.include_router(users.router)
 app.include_router(boards.router)
 app.include_router(ws.router)
